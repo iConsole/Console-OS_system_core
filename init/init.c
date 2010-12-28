@@ -519,6 +519,8 @@ void handle_control_message(const char *msg, const char *arg)
 static struct command *get_first_command(struct action *act)
 {
     struct listnode *node;
+    if (list_empty(&act->commands))
+        return NULL;
     node = list_head(&act->commands);
     if (!node || list_empty(&act->commands))
         return NULL;
