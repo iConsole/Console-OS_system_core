@@ -27,6 +27,7 @@
 #include <linux/if.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
+#include <sys/wait.h>
 #include <sys/mount.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -256,7 +257,38 @@ int do_enable(int nargs, char **args)
 
 int do_exec(int nargs, char **args)
 {
-    return -1;
+    pid_t pid;
+    int status, i, prop_fd, prop_size, ret;
+    char *par[nargs], env_property[64], *env[3];
+    char *env_libpath = "LD_LIBRARY_PATH=/system/lib";
+
+    for (i = 0; i < (nargs - 1); i++) {
+        par[i] = args[i + 1];
+    }
+    par[i] = NULL;
+
+    pid = fork();
+    if (pid == 0) {
+        /* Enable system properties */
+        get_property_workspace(&prop_fd, &prop_size);
+        memset(env_property, 0, sizeof(env_property));
+        sprintf(env_property, "ANDROID_PROPERTY_WORKSPACE=%d,%d",
+                dup(prop_fd), prop_size);
+        env[0] = env_libpath;
+        env[1] = env_property;
+        env[2] = NULL;
+
+        ret = execve(par[0], par, env);
+        ERROR("execve %s (ret = %d, errno = %d)\n", par[0], ret, errno);
+        _exit(127);
+    } else if (pid > 0) {
+        do {
+            ret = waitpid(pid, &status, 0);
+        } while ((ret < 0) && (errno == EINTR));
+    } else {
+        ERROR("fork error\n");
+    }
+    return 0;
 }
 
 int do_export(int nargs, char **args)
