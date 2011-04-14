@@ -145,6 +145,7 @@ static int lookup_keyword(const char *s)
         if (!strcmp(s, "etenforce")) return K_setenforce;
         if (!strcmp(s, "etenv")) return K_setenv;
         if (!strcmp(s, "etkey")) return K_setkey;
+        if (!strcmp(s, "etkeycode")) return K_setkeycode;
         if (!strcmp(s, "etprop")) return K_setprop;
         if (!strcmp(s, "etrlimit")) return K_setrlimit;
         if (!strcmp(s, "etsebool")) return K_setsebool;

@@ -24,6 +24,7 @@ int do_rmdir(int nargs, char **args);
 int do_setcon(int nargs, char **args);
 int do_setenforce(int nargs, char **args);
 int do_setkey(int nargs, char **args);
+int do_setkeycode(int nargs, char **args);
 int do_setprop(int nargs, char **args);
 int do_setrlimit(int nargs, char **args);
 int do_setsebool(int nargs, char **args);
@@ -84,6 +85,7 @@ enum {
     KEYWORD(setenforce,  COMMAND, 1, do_setenforce)
     KEYWORD(setenv,      OPTION,  2, 0)
     KEYWORD(setkey,      COMMAND, 0, do_setkey)
+    KEYWORD(setkeycode,  COMMAND, 2, do_setkeycode)
     KEYWORD(setprop,     COMMAND, 2, do_setprop)
     KEYWORD(setrlimit,   COMMAND, 3, do_setrlimit)
     KEYWORD(setsebool,   COMMAND, 2, do_setsebool)
