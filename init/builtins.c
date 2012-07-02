@@ -34,6 +34,9 @@
 #include <cutils/partition_utils.h>
 #include <cutils/android_reboot.h>
 #include <fs_mgr.h>
+#include <fnmatch.h>
+#include <dirent.h>
+#include <cutils/probe_module.h>
 
 #include <selinux/selinux.h>
 #include <selinux/label.h>
@@ -303,6 +306,40 @@ int do_insmod(int nargs, char **args)
     }
 
     return do_insmod_inner(nargs, args, size);
+}
+
+static int do_probemod_inner(int nargs, char **args, int opt_len)
+{
+    char options[opt_len + 1];
+    int i;
+    int ret;
+
+    options[0] = '\0';
+    if (nargs > 2) {
+        strcpy(options, args[2]);
+        for (i = 3; i < nargs; ++i) {
+            strcat(options, " ");
+            strcat(options, args[i]);
+        }
+    }
+
+    ret = insmod_by_dep(args[1], options, NULL, 1, NULL);
+    if (ret)
+        ERROR("Couldn't probe module '%s'\n", args[1]);
+    return ret;
+}
+
+int do_probemod(int nargs, char **args)
+{
+    int i;
+    int size = 0;
+
+    if (nargs > 2) {
+        for (i = 2; i < nargs; ++i)
+            size += strlen(args[i]) + 1;
+    }
+
+    return do_probemod_inner(nargs, args, size);
 }
 
 int do_mkdir(int nargs, char **args)
@@ -603,6 +640,16 @@ int do_setkey(int nargs, char **args)
     kbe.kb_index = strtoul(args[2], 0, 0);
     kbe.kb_value = strtoul(args[3], 0, 0);
     return setkey(&kbe);
+}
+
+int do_builtin_coldboot(int nargs, char **args)
+{
+    if (nargs != 2 || !args[1] || *args[1] == '\0')
+        return -1;
+
+    coldboot(args[1]);
+
+    return 0;
 }
 
 int do_setprop(int nargs, char **args)

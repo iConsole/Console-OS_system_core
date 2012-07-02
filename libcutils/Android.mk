@@ -38,6 +38,7 @@ commonSources := \
 	threads.c \
 	sched_policy.c \
 	iosched_policy.c \
+	probe_module.c \
 	str_parms.c \
 
 # some files must not be compiled when building against Mingw
