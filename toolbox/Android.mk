@@ -143,6 +143,7 @@ OUR_TOOLS := \
     chmod \
     clear \
     cmp \
+    cmpprop \
     date \
     df \
     dmesg \
@@ -192,6 +193,8 @@ OUR_TOOLS := \
     swapon \
     top \
     touch \
+    trycmpprop \
+    trygetprop \
     umount \
     uptime \
     vmstat \
