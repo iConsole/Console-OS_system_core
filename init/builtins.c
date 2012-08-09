@@ -684,9 +684,16 @@ int do_mount_all(int nargs, char **args)
             ret = -1;
         }
     } else if (pid == 0) {
+        char *prop_val;
         /* child, call fs_mgr_mount_all() */
         klog_set_level(6);  /* So we can see what fs_mgr_mount_all() does */
-        fstab = fs_mgr_read_fstab(args[1]);
+        prop_val = expand_references(args[1]);
+        if (!prop_val) {
+            ERROR("cannot expand '%s'\n", args[1]);
+            return -1;
+        }
+        fstab = fs_mgr_read_fstab(prop_val);
+        free(prop_val);
         child_ret = fs_mgr_mount_all(fstab);
         fs_mgr_free_fstab(fstab);
         if (child_ret == -1) {
