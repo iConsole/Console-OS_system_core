@@ -27,7 +27,9 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 
+#ifndef HOST_BUILD
 #include <linux/fs.h>
+#endif
 
 #include <cutils/config_utils.h>
 #include <log/log.h>
@@ -236,6 +238,7 @@ fail:
     return NULL;
 }
 
+#ifndef HOST_BUILD
 static int
 sync_ptable(int fd)
 {
@@ -256,6 +259,13 @@ sync_ptable(int fd)
 
     return 0;
 }
+#else
+static int sync_ptable(int fd)
+{
+    (void)fd;
+    return 0;
+}
+#endif
 
 /* This function verifies that the disk info provided is valid, and if so,
  * returns an open file descriptor.
@@ -272,7 +282,6 @@ static int
 validate(struct disk_info *dinfo)
 {
     int fd;
-    int sect_sz;
     uint64_t disk_size;
     uint64_t total_size;
     int cnt;
@@ -298,6 +307,12 @@ validate(struct disk_info *dinfo)
     /* Verify that we can operate on the device that was requested.
      * We presently only support block devices and regular file images. */
     if (S_ISBLK(stat.st_mode)) {
+#ifdef HOST_BUILD
+        ALOGE("Block device manipulation on host forbidden");
+        goto fail;
+#else
+        int sect_sz;
+
         /* get the sector size and make sure we agree */
         if (ioctl(fd, BLKSSZGET, &sect_sz) < 0) {
             ALOGE("Cannot get sector size (errno=%d)", errno);
@@ -319,6 +334,7 @@ validate(struct disk_info *dinfo)
             dinfo->num_lba = (uint32_t)(disk_size / (uint64_t)dinfo->sect_size);
         } else
             disk_size = (uint64_t)dinfo->num_lba * (uint64_t)dinfo->sect_size;
+#endif
     } else if (S_ISREG(stat.st_mode)) {
         ALOGI("Requesting operation on a regular file, not block device.");
         if (!dinfo->sect_size) {
