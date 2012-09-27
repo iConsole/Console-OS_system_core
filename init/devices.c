@@ -590,7 +590,8 @@ static void handle_device(const char *action, const char *devpath,
     int i;
 
     if(!strcmp(action, "add")) {
-        make_device(devpath, path, block, major, minor, (const char **)links);
+        if (major >= 0 && minor >= 0)
+            make_device(devpath, path, block, major, minor, (const char **)links);
         __system_property_set("ctl.dev_added", devpath);
         if (links) {
             for (i = 0; links[i]; i++)
@@ -604,7 +605,8 @@ static void handle_device(const char *action, const char *devpath,
                 remove_link(devpath, links[i]);
         }
         __system_property_set("ctl.dev_removed", devpath);
-        unlink(devpath);
+        if (major >= 0 && minor >= 0)
+            unlink(devpath);
     }
 
     if (links) {
@@ -627,10 +629,6 @@ static void handle_platform_device_event(struct uevent *uevent)
 static const char *parse_device_name(struct uevent *uevent, unsigned int len)
 {
     const char *name;
-
-    /* if it's not a /dev device, nothing else to do */
-    if((uevent->major < 0) || (uevent->minor < 0))
-        return NULL;
 
     /* do we have a name? */
     name = strrchr(uevent->path, '/');
