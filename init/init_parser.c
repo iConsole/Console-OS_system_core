@@ -137,6 +137,7 @@ static int lookup_keyword(const char *s)
         if (!strcmp(s, "robemod")) return K_probemod;
         break;
     case 'r':
+        if (!strcmp(s, "eadprops")) return K_readprops;
         if (!strcmp(s, "estart")) return K_restart;
         if (!strcmp(s, "estorecon")) return K_restorecon;
         if (!strcmp(s, "estorecon_recursive")) return K_restorecon_recursive;

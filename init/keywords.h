@@ -18,6 +18,7 @@ int do_mount_all(int nargs, char **args);
 int do_mount(int nargs, char **args);
 int do_powerctl(int nargs, char **args);
 int do_probemod(int nargs, char **args);
+int do_readprops(int nargs, char **args);
 int do_restart(int nargs, char **args);
 int do_restorecon(int nargs, char **args);
 int do_restorecon_recursive(int nargs, char **args);
@@ -77,6 +78,7 @@ enum {
     KEYWORD(onrestart,   OPTION,  0, 0)
     KEYWORD(powerctl,    COMMAND, 1, do_powerctl)
     KEYWORD(probemod,    COMMAND, 1, do_probemod)
+    KEYWORD(readprops,   COMMAND, 1, do_readprops)
     KEYWORD(restart,     COMMAND, 1, do_restart)
     KEYWORD(restorecon,  COMMAND, 1, do_restorecon)
     KEYWORD(restorecon_recursive,  COMMAND, 1, do_restorecon_recursive)

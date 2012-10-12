@@ -817,6 +817,14 @@ int do_stop(int nargs, char **args)
     return 0;
 }
 
+int do_readprops(int nargs, char **args)
+{
+    if (nargs == 2) {
+        return load_properties_from_file(args[1], NULL);
+    }
+    return -1;
+}
+
 int do_restart(int nargs, char **args)
 {
     struct service *svc;
