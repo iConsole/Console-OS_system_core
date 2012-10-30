@@ -1037,6 +1037,7 @@ int main(int argc, char **argv)
     int signal_fd_init = 0;
     int keychord_fd_init = 0;
     bool is_charger = false;
+    char initrc_path[PROP_VALUE_MAX];
 
     if (!strcmp(basename(argv[0]), "ueventd"))
         return ueventd_main(argc, argv);
@@ -1101,8 +1102,10 @@ int main(int argc, char **argv)
     INFO("property init\n");
     property_load_boot_defaults();
 
-    INFO("reading config file\n");
-    init_parse_config_file("/init.rc");
+    if (property_get("ro.boot.initrc", initrc_path) == 0)
+        strcpy(initrc_path, "/init.rc");
+    INFO("reading config file %s\n", initrc_path);
+    init_parse_config_file(initrc_path);
 
     action_for_each_trigger("early-init", action_add_queue_tail);
 
