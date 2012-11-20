@@ -1055,6 +1055,9 @@ int main(int argc, char **argv)
 
     process_kernel_cmdline();
 
+    if ((tmpdev = getenv("HWACCEL")) && *tmpdev == '0') {
+        property_set("debug.egl.hw", tmpdev);
+    }
     union selinux_callback cb;
     cb.func_log = log_callback;
     selinux_set_callback(SELINUX_CB_LOG, cb);
@@ -1102,6 +1105,9 @@ int main(int argc, char **argv)
         action_for_each_trigger("charger", action_add_queue_tail);
     } else {
         action_for_each_trigger("late-init", action_add_queue_tail);
+    }
+    if ((tmpdev = getenv("DEBUG")) && *tmpdev) {
+        property_set("debug.logcat", *tmpdev == '0' ? "0" : "1");
     }
 
     /* run all property triggers based on current state of the properties */
