@@ -682,21 +682,27 @@ static int keychord_init_action(int nargs, char **args)
     return 0;
 }
 
+#define SLEEP_MS    50
+
 static int console_init_action(int nargs, char **args)
 {
     int fd;
+    int count = (5000 / SLEEP_MS);
 
     if (console[0]) {
         snprintf(console_name, sizeof(console_name), "/dev/%s", console);
     }
 
-    fd = open(console_name, O_RDWR);
-    if (fd >= 0)
-        have_console = 1;
-    close(fd);
-
-    fd = open("/dev/tty0", O_WRONLY);
+    /* Block the boot until the console node comes up */
+    while (1) {
+        fd = open(console_name, O_WRONLY);
+        if (fd < 0 && count--)
+            usleep(SLEEP_MS * 1000);
+        else
+            break;
+    }
     if (fd >= 0) {
+        have_console = 1;
         const char *msg;
             msg = "\n"
         "\n"
@@ -715,6 +721,8 @@ static int console_init_action(int nargs, char **args)
         "             A N D R O I D ";
         write(fd, msg, strlen(msg));
         close(fd);
+    } else {
+        ERROR("Gave up trying to open console %s\n", console_name);
     }
 
     return 0;
