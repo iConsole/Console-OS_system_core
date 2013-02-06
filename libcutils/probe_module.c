@@ -17,20 +17,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <cutils/misc.h>
+#include <sys/utsname.h>
 
 #define LOG_TAG "ProbeModule"
 #include <cutils/log.h>
 
-
-#define LDM_DEFAULT_DEP_FILE "/system/lib/modules/modules.dep"
 #define LDM_DEFAULT_MOD_PATH "/system/lib/modules/"
 #define LDM_INIT_DEP_NUM 10
 
 extern int init_module(void *, unsigned long, const char *);
 extern int delete_module(const char *, unsigned int);
+
+/* get_default_mod_path() interface to outside,
+ * refer to its description in probe_module.h
+ */
+char *get_default_mod_path(char *def_mod_path)
+{
+    int len;
+    struct utsname buf;
+    uname(&buf);
+    len = snprintf(def_mod_path, PATH_MAX, "%s", LDM_DEFAULT_MOD_PATH);
+    strcpy(def_mod_path + len, buf.release);
+    if (access(def_mod_path, F_OK))
+        def_mod_path[len] = '\0';
+    else
+        strcat(def_mod_path, "/");
+    return def_mod_path;
+}
 
 static void dump_dep(char **dep)
 {
@@ -228,10 +245,13 @@ static int insmod_s(char *dep[], const char *args, int strip, const char *base)
     int cnt;
     size_t len;
     int ret = 0;
-    const char * base_dir = LDM_DEFAULT_MOD_PATH;
+    char def_mod_path[PATH_MAX];
+    const char *base_dir;
 
     if (base && strlen(base))
         base_dir = base;
+    else
+        base_dir = get_default_mod_path(def_mod_path);
 
     /* load modules in reversed order */
     for (cnt = 0; dep[cnt]; cnt++)
@@ -362,13 +382,14 @@ static char ** look_up_dep(const char *module_name, void *dep_file)
  * */
 static void *load_dep_file(const char *file_name)
 {
-    const char *dep_file_name = LDM_DEFAULT_DEP_FILE;
     unsigned int len;
+    char def_mod_path[PATH_MAX];
+    if (!file_name || *file_name == '\0') {
+        file_name = get_default_mod_path(def_mod_path);
+        strcat(def_mod_path, "modules.dep");
+    }
 
-    if (file_name && *file_name != '\0')
-        dep_file_name = file_name;
-
-    return load_file(dep_file_name, &len);
+    return load_file(file_name, &len);
 }
 
 /* insmod_by_dep() interface to outside,

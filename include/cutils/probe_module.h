@@ -21,6 +21,16 @@
 extern "C" {
 #endif
 
+/* get_default_mod_path() - get the default modules path
+ * It checks /system/lib/modules/$(uname -r)/ first. If it doesn't exist,
+ * fall back to /system/lib/modules/.
+ *
+ * def_mod_path: The buffer to be filled
+ *
+ * return      : def_mod_path
+ */
+extern char *get_default_mod_path(char *def_mod_path);
+
 /* insmod_by_dep() - load a kernel module (target) with its dependency
  * The module's dependency must be described in the provided dependency file.
  * other modules in the dependency chain will be loaded prior to the target.
