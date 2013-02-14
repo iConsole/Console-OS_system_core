@@ -829,13 +829,11 @@ out:
     return ret;
 }
 
-static int load_module_by_device_modalias(const char *id)
+static int do_load_module_by_device_modalias(const char *id)
 {
     struct listnode *alias_node;
     struct module_alias_node *alias;
     int ret = -1;
-
-    if (!id) goto out;
 
     list_for_each(alias_node, &modules_aliases_map) {
         alias = node_to_item(alias_node, struct module_alias_node, list);
@@ -855,27 +853,38 @@ static int load_module_by_device_modalias(const char *id)
                         /* loading was successful */
                         INFO("loaded module %s due to uevents\n", alias->name);
                         ret = 0;
-                        goto out;
+                        break;
                     }
                 }
             }
         }
     }
 
-out:
     return ret;
+}
+
+static void load_module_by_device_modalias(const char *id)
+{
+    if (id) {
+        pid_t pid = fork();
+        if (!pid) {
+            exit(do_load_module_by_device_modalias(id));
+        } else if (pid < 0) {
+            ERROR("failed to fork for loading %s\n", id);
+        }
+    }
 }
 
 static void handle_deferred_module_loading()
 {
-    struct listnode *node = NULL;
-    struct listnode *next = NULL;
-    struct module_alias_node *alias = NULL;
-
     /* try to read the module alias mapping if map is empty
      * if succeed, loading all the modules in the queue
      */
     if (!list_empty(&modules_aliases_map)) {
+        struct listnode *node = NULL;
+        struct listnode *next = NULL;
+        struct module_alias_node *alias = NULL;
+
         list_for_each_safe(node, next, &deferred_module_loading_list) {
             alias = node_to_item(node, struct module_alias_node, list);
 
@@ -899,7 +908,7 @@ int module_probe(const char *modalias)
             return -1;
     }
 
-    return load_module_by_device_modalias(modalias);
+    return modalias ? do_load_module_by_device_modalias(modalias) : -1;
 }
 
 static void handle_module_loading(const char *modalias)
