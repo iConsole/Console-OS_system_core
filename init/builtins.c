@@ -37,6 +37,7 @@
 #include <fnmatch.h>
 #include <dirent.h>
 #include <cutils/probe_module.h>
+#include <time.h>
 
 #include <selinux/selinux.h>
 #include <selinux/label.h>
@@ -50,6 +51,8 @@
 #include "log.h"
 
 #include <private/android_filesystem_config.h>
+
+#define TIMEZONE "/data/property/persist.sys.timezone"
 
 enum builtin_cmds {
     DO_CHOWN,
@@ -897,14 +900,73 @@ int do_rmdir(int nargs, char **args)
 int do_sysclktz(int nargs, char **args)
 {
     struct timezone tz;
+    struct timeval tv;
+    struct tm tm;
+    FILE *fp;
+    char *line = NULL;
+    size_t len = 0;
+    char hwtime_mode[PROP_VALUE_MAX];
+    time_t t;
 
     if (nargs != 2)
         return -1;
 
     memset(&tz, 0, sizeof(tz));
-    tz.tz_minuteswest = atoi(args[1]);   
-    if (settimeofday(NULL, &tz))
+    memset(&tv, 0, sizeof(tv));
+    memset(&tm, 0, sizeof(tm));
+
+    if (!strcmp(args[1], "0")) {
+        tz.tz_minuteswest = atoi(args[1]);
+        if (settimeofday(NULL, &tz))
+            return -1;
+        return 0;
+    }
+
+    if (gettimeofday(&tv, NULL))
         return -1;
+    if (property_get("ro.rtc_local_time", hwtime_mode) && !strcmp(hwtime_mode, "1")
+                    && !strcmp(args[1], "1")) {
+
+        /* Notify kernel that hwtime use local time */
+        write_file("/sys/class/misc/alarm/rtc_local_time",
+                    hwtime_mode);
+        /*
+         * If ro.hwtime.mode is local, set system time
+         * and saved system zone in case of network not
+         * available and auto syncing time not available.
+         */
+        if (access(TIMEZONE, 0) == 0) {
+            fp = fopen(TIMEZONE, "r+");
+            if (fp == NULL)
+                return -1;
+
+            if (getline(&line, &len, fp) == -1)
+                tz.tz_minuteswest = 0;
+            else {
+                /* Hack to get timezone. */
+                for (len = 0; *(line+len) != '\n' && *(line+len) != 0; len++);
+                *(line+len) = '\0';
+                property_set("persist.sys.timezone", line);
+                t = tv.tv_sec;
+                localtime_r(&t, &tm);
+                tz.tz_minuteswest = -(tm.tm_gmtoff / 60);
+            }
+            free(line);
+            fclose(fp);
+        }
+        else
+            tz.tz_minuteswest = 0;
+
+        /*
+         * At this moment, system time should be local
+         * time too, set it back to utc which linux required.
+         */
+        tv.tv_sec += tz.tz_minuteswest * 60;
+        if (settimeofday(&tv, &tz))
+            return -1;
+    } else {
+        return -1;
+    }
     return 0;
 }
 
