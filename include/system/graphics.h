@@ -314,6 +314,11 @@ enum {
      */
     HAL_PIXEL_FORMAT_YCbCr_420_888 = 0x23,
 
+    /*
+     * DRM specific format used by drm_gralloc
+     */
+    HAL_PIXEL_FORMAT_DRM_NV12 = 0x102,
+
     /* Legacy formats (deprecated), used by ImageFormat.java */
     HAL_PIXEL_FORMAT_YCbCr_422_SP       = 0x10, // NV16
     HAL_PIXEL_FORMAT_YCrCb_420_SP       = 0x11, // NV21
