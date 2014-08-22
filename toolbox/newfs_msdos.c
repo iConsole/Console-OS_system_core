@@ -249,7 +249,7 @@ int newfs_msdos_main(int argc, char *argv[])
     char buf[MAXPATHLEN];
     struct stat sb;
     struct timeval tv;
-    struct bpb bpb;
+    struct bpb bpb, tempbpb;
     struct tm *tm;
     struct bs *bs;
     struct bsbpb *bsbpb;
@@ -553,6 +553,7 @@ int newfs_msdos_main(int argc, char *argv[])
     set_spf = !bpb.bspf;
     set_spc = !bpb.spc;
     tempx = x;
+    memset(&tempbpb, 0, sizeof(bpb));
     /*
      * Attempt to align if opt_A is set. This is done by increasing the number
      * of reserved blocks. This can cause other factors to change, which can in
@@ -600,10 +601,14 @@ int newfs_msdos_main(int argc, char *argv[])
             alignment = (bpb.res + bpb.bspf * bpb.nft) % bpb.spc;
             extra_res += bpb.spc - alignment;
         }
-        attempts++;
+        if (++attempts == 1)
+            memcpy(&tempbpb, &bpb, sizeof(bpb));
     } while(opt_A && alignment != 0 && attempts < 2);
-    if (alignment != 0)
+    if (alignment != 0) {
         warnx("warning: Alignment failed.");
+        /* return to data from first iteration */
+        memcpy(&bpb, &tempbpb, sizeof(bpb));
+    }
 
     cls = (bpb.bsec - x1) / bpb.spc;
     x = (u_int64_t)bpb.bspf * bpb.bps * NPB / (fat / BPN) - RESFTE;
