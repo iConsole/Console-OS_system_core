@@ -55,6 +55,7 @@ include $(BUILD_EXECUTABLE)
 
 # Make a symlink from /sbin/ueventd and /sbin/watchdogd to /init
 SYMLINKS := \
+	$(TARGET_ROOT_OUT)/sbin/modprobe \
 	$(TARGET_ROOT_OUT)/sbin/ueventd \
 	$(TARGET_ROOT_OUT)/sbin/watchdogd
 

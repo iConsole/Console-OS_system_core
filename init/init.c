@@ -53,6 +53,7 @@
 #include "bootchart.h"
 #include "signal_handler.h"
 #include "keychords.h"
+#include "keywords.h"
 #include "init_parser.h"
 #include "util.h"
 #include "ueventd.h"
@@ -1049,6 +1050,32 @@ static void selinux_initialize(void)
     security_setenforce(is_enforcing);
 }
 
+int modprobe_main(int argc, char **argv)
+{
+    char *prog = argv[0];
+
+    /* We only accept requests from root user (kernel) */
+    if (getuid())
+        return -EPERM;
+
+    /* Kernel will launch a user space program specified by
+     * /proc/sys/kernel/modprobe to load modules.
+     * No deferred loading in this case.
+     */
+    while (argc > 1 && (!strcmp(argv[1], "-q") || !strcmp(argv[1], "--"))) {
+        klog_set_level(KLOG_NOTICE_LEVEL);
+        argc--, argv++;
+    }
+
+    if (argc < 2) {
+        /* it is called without enough arguments */
+        return -EINVAL;
+    }
+
+    NOTICE("%s %s\n", prog, argv[1]);
+    return module_probe(argv[1]) ? do_probemod(argc, argv) : 0;
+}
+
 int main(int argc, char **argv)
 {
     int fd_count = 0;
@@ -1061,6 +1088,12 @@ int main(int argc, char **argv)
     int keychord_fd_init = 0;
     bool is_charger = false;
     char initrc_path[PROP_VALUE_MAX];
+
+    /* If we are called as 'modprobe' command, we run as a
+     * standalone executable and reuse ueventd's logic to do the job.
+     */
+    if (strstr(argv[0], "modprobe"))
+        return modprobe_main(argc, argv);
 
     if (!strcmp(basename(argv[0]), "ueventd"))
         return ueventd_main(argc, argv);
