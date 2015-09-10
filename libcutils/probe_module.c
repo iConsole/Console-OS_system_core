@@ -27,7 +27,6 @@
 #include <cutils/log.h>
 
 #define LDM_DEFAULT_MOD_PATH "/system/lib/modules/"
-#define LDM_INIT_DEP_NUM 10
 
 extern int init_module(void *, unsigned long, const char *);
 extern int delete_module(const char *, unsigned int);
@@ -57,17 +56,10 @@ static void dump_dep(char **dep)
         ALOGD("DUMP DEP: %s\n", dep[d]);
 }
 
-static char * strip_path(const char * const str)
+static char *strip_path(char *str)
 {
-    char *ptr;
-    int i;
-
-    /* initialize pos to terminator */
-    for (i = strlen(str); i > 0; i--)
-        if (str[i - 1] == '/')
-            break;
-
-    return (char *)&str[i];
+    char *ptr = strrchr(str, '/');
+    return ptr ? ptr + 1 : str;
 }
 
 static void hyphen_to_underscore(char *str)
@@ -111,8 +103,7 @@ static int match_name(const char *s1, const char *s2, const size_t size)
 static int is_target_module(char *line, const char *target)
 {
     char *token;
-    char *name;
-    size_t name_len;
+    char name[PATH_MAX];
     const char *suffix = ".ko";
     const char *delimiter = ":";
     int ret = 0;
@@ -129,23 +120,12 @@ static int is_target_module(char *line, const char *target)
     *token = '\0';
 
     /* use "module.ko" in comparision */
-    name_len = strlen(suffix) + strlen(target) + 1;
+    strcat(strcpy(name, target), ".ko");
 
-    name = malloc(sizeof(char) * name_len);
-
-    if (!name) {
-        ALOGE("cannot alloc ram for comparision\n");
-        return 0;
-    }
-
-    snprintf(name, name_len, "%s%s", target, suffix);
-
-    ret = !match_name(strip_path(line), name, name_len);
+    ret = !match_name(strip_path(line), name, strlen(name));
 
     /* restore [single] token, keep line unchanged until we parse it later */
     *token = *delimiter;
-
-    free(name);
 
     return ret;
 
@@ -159,45 +139,21 @@ static int is_target_module(char *line, const char *target)
  */
 static char** setup_dep(char *line)
 {
-    char *tmp;
+    char *tmp = line;
     char *brk;
-    int dep_num = LDM_INIT_DEP_NUM;
-    char **new;
     int i;
-    char **dep = NULL;
+    char **dep;
 
-    dep = malloc(sizeof(char *) * dep_num);
+    for (i = 2; (tmp = strchr(tmp, ' ')); i++)
+        tmp++;
 
-    if (!dep) {
-        ALOGE("cannot alloc dep array\n");
-        return dep;
+    dep = malloc(sizeof(char *) * i);
+    if (dep) {
+        i = 0;
+        do {
+            tmp = strtok_r(i ? NULL : line, ": ", &brk);
+        } while ((dep[i++] = tmp));
     }
-
-    for (i = 0, tmp = strtok_r(line, ": ", &brk);
-            tmp;
-            tmp = strtok_r(NULL, ": ", &brk), i++) {
-
-        /* check if we need enlarge dep array */
-        if (!(i < dep_num - 1)) {
-
-            dep_num += LDM_INIT_DEP_NUM;
-
-            new = realloc(dep, dep_num);
-
-            if (!new) {
-                ALOGE("failed to enlarge dep buffer\n");
-                free(dep);
-                return NULL;
-            }
-            else
-                dep = new;
-        }
-
-        dep[i] = tmp;
-
-    }
-    /* terminate array with a null pointer */
-    dep[i] = NULL;
 
     return dep;
 }
@@ -241,10 +197,10 @@ static int insmod(const char *path_name, const char *args)
 static int insmod_s(char *dep[], const char *args, int strip, const char *base)
 {
     char *name;
-    char *path_name;
     int cnt;
     size_t len;
     int ret = 0;
+    char path_name[PATH_MAX];
     char def_mod_path[PATH_MAX];
     const char *base_dir;
 
@@ -257,30 +213,15 @@ static int insmod_s(char *dep[], const char *args, int strip, const char *base)
     for (cnt = 0; dep[cnt]; cnt++)
         ;
 
-    while (cnt--) {
+    len = strlen(strcpy(path_name, base_dir));
+
+    while (!ret && cnt--) {
 
         name = strip ? strip_path(dep[cnt]) : dep[cnt];
 
-        len = strlen(base_dir) + strlen(name) + 1;
+        strcpy(path_name + len, name);
 
-        path_name = malloc(sizeof(char) * len);
-
-        if (!path_name) {
-            ALOGE("alloc module [%s] path failed\n", path_name);
-            return -1;
-        }
-
-        snprintf(path_name, len, "%s%s", base_dir, name);
-
-        if (cnt)
-            ret = insmod(path_name, "");
-        else
-            ret = insmod(path_name, args);
-
-        free(path_name);
-
-        if (ret)
-            break;
+        ret = insmod(path_name, cnt ? "" : args);
     }
 
     return ret;
