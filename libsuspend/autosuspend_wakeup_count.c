@@ -71,13 +71,13 @@ static void *suspend_thread_func(void *arg __attribute__((unused)))
             continue;
         }
 
-        ALOGV("%s: write %*s to wakeup_count\n", __func__, wakeup_count_len, wakeup_count);
+        ALOGD("%s: write %*s to wakeup_count\n", __func__, wakeup_count_len, wakeup_count);
         ret = write(wakeup_count_fd, wakeup_count, wakeup_count_len);
         if (ret < 0) {
             strerror_r(errno, buf, sizeof(buf));
             ALOGE("Error writing to %s: %s\n", SYS_POWER_WAKEUP_COUNT, buf);
         } else {
-            ALOGV("%s: write %s to %s\n", __func__, sleep_state, SYS_POWER_STATE);
+            ALOGD("%s: write %s to %s\n", __func__, sleep_state, SYS_POWER_STATE);
             ret = write(state_fd, sleep_state, strlen(sleep_state));
             if (ret < 0) {
                 strerror_r(errno, buf, sizeof(buf));
@@ -105,7 +105,7 @@ static int autosuspend_wakeup_count_enable(void)
     char buf[80];
     int ret;
 
-    ALOGV("autosuspend_wakeup_count_enable\n");
+    ALOGD("autosuspend_wakeup_count_enable");
 
     ret = sem_post(&suspend_lockout);
 
@@ -114,7 +114,7 @@ static int autosuspend_wakeup_count_enable(void)
         ALOGE("Error changing semaphore: %s\n", buf);
     }
 
-    ALOGV("autosuspend_wakeup_count_enable done\n");
+    ALOGD("autosuspend_wakeup_count_enable done");
 
     return ret;
 }
@@ -124,7 +124,7 @@ static int autosuspend_wakeup_count_disable(void)
     char buf[80];
     int ret;
 
-    ALOGV("autosuspend_wakeup_count_disable\n");
+    ALOGD("autosuspend_wakeup_count_disable");
 
     ret = sem_wait(&suspend_lockout);
 
@@ -133,7 +133,7 @@ static int autosuspend_wakeup_count_disable(void)
         ALOGE("Error changing semaphore: %s\n", buf);
     }
 
-    ALOGV("autosuspend_wakeup_count_disable done\n");
+    ALOGD("autosuspend_wakeup_count_disable done");
 
     return ret;
 }

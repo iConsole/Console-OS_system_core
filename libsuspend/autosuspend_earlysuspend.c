@@ -34,6 +34,7 @@
 #define EARLYSUSPEND_WAIT_FOR_FB_WAKE "/sys/power/wait_for_fb_wake"
 
 static int sPowerStatefd;
+static char pwr_states[128];
 static const char *pwr_state_mem = "mem";
 static const char *pwr_state_on = "on";
 static pthread_t earlysuspend_thread;
@@ -45,41 +46,56 @@ static enum {
     EARLYSUSPEND_MEM,
 } earlysuspend_state = EARLYSUSPEND_ON;
 
-int wait_for_fb_wake(void)
+static void log_err(const char *fmt, ...)
 {
-    int err = 0;
-    char buf;
-    int fd = open(EARLYSUSPEND_WAIT_FOR_FB_WAKE, O_RDONLY, 0);
+    char err[80];
+    char buf[512];
+
+    strerror_r(errno, err, sizeof(err));
+
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    ALOGE("Error %s: %s", buf, err);
+}
+
+static int open_file(const char *file, char *buf, size_t sz)
+{
+    int err;
+    int fd = open(file, O_RDONLY, 0);
     // if the file doesn't exist, the error will be caught in read() below
     do {
-        err = read(fd, &buf, 1);
+        err = read(fd, buf, sz);
     } while (err < 0 && errno == EINTR);
-    ALOGE_IF(err < 0,
-            "*** ANDROID_WAIT_FOR_FB_WAKE failed (%s)", strerror(errno));
+
+    if (err < 0) {
+        log_err("opening %s", file);
+    } else {
+        err = 0;
+    }
+
     close(fd);
-    return err < 0 ? err : 0;
+    return err;
+}
+
+static int wait_for_fb_wake(void)
+{
+    char buf;
+    return open_file(EARLYSUSPEND_WAIT_FOR_FB_WAKE, &buf, 1);
 }
 
 static int wait_for_fb_sleep(void)
 {
-    int err = 0;
     char buf;
-    int fd = open(EARLYSUSPEND_WAIT_FOR_FB_SLEEP, O_RDONLY, 0);
-    // if the file doesn't exist, the error will be caught in read() below
-    do {
-        err = read(fd, &buf, 1);
-    } while (err < 0 && errno == EINTR);
-    ALOGE_IF(err < 0,
-            "*** ANDROID_WAIT_FOR_FB_SLEEP failed (%s)", strerror(errno));
-    close(fd);
-    return err < 0 ? err : 0;
+    return open_file(EARLYSUSPEND_WAIT_FOR_FB_SLEEP, &buf, 1);
 }
 
 static void *earlysuspend_thread_func(void __unused *arg)
 {
     while (1) {
         if (wait_for_fb_sleep()) {
-            ALOGE("Failed reading wait_for_fb_sleep, exiting earlysuspend thread\n");
+            ALOGE("Failed reading wait_for_fb_sleep, exiting earlysuspend thread");
             return NULL;
         }
         pthread_mutex_lock(&earlysuspend_mutex);
@@ -88,7 +104,7 @@ static void *earlysuspend_thread_func(void __unused *arg)
         pthread_mutex_unlock(&earlysuspend_mutex);
 
         if (wait_for_fb_wake()) {
-            ALOGE("Failed reading wait_for_fb_wake, exiting earlysuspend thread\n");
+            ALOGE("Failed reading wait_for_fb_wake, exiting earlysuspend thread");
             return NULL;
         }
         pthread_mutex_lock(&earlysuspend_mutex);
@@ -99,16 +115,15 @@ static void *earlysuspend_thread_func(void __unused *arg)
 }
 static int autosuspend_earlysuspend_enable(void)
 {
-    char buf[80];
     int ret;
 
-    ALOGV("autosuspend_earlysuspend_enable\n");
+    ALOGI("autosuspend_earlysuspend_enable");
 
-    ret = write(sPowerStatefd, pwr_state_mem, strlen(pwr_state_mem));
+    int fd = open(EARLYSUSPEND_SYS_POWER_STATE, O_RDWR);
+    ret = write(fd, pwr_state_mem, strlen(pwr_state_mem));
     if (ret < 0) {
-        strerror_r(errno, buf, sizeof(buf));
-        ALOGE("Error writing to %s: %s\n", EARLYSUSPEND_SYS_POWER_STATE, buf);
-        goto err;
+        log_err("writing %s to %s", pwr_state_mem, EARLYSUSPEND_SYS_POWER_STATE);
+        return ret;
     }
 
     if (wait_for_earlysuspend) {
@@ -119,12 +134,9 @@ static int autosuspend_earlysuspend_enable(void)
         pthread_mutex_unlock(&earlysuspend_mutex);
     }
 
-    ALOGV("autosuspend_earlysuspend_enable done\n");
+    ALOGD("autosuspend_earlysuspend_enable done");
 
     return 0;
-
-err:
-    return ret;
 }
 
 static int autosuspend_earlysuspend_disable(void)
@@ -132,13 +144,12 @@ static int autosuspend_earlysuspend_disable(void)
     char buf[80];
     int ret;
 
-    ALOGV("autosuspend_earlysuspend_disable\n");
+    ALOGI("autosuspend_earlysuspend_disable");
 
     ret = write(sPowerStatefd, pwr_state_on, strlen(pwr_state_on));
     if (ret < 0) {
         strerror_r(errno, buf, sizeof(buf));
-        ALOGE("Error writing to %s: %s\n", EARLYSUSPEND_SYS_POWER_STATE, buf);
-        goto err;
+        ALOGE("Error writing %s to %s: %s\n", pwr_state_on, EARLYSUSPEND_SYS_POWER_STATE, buf);
     }
 
     if (wait_for_earlysuspend) {
@@ -149,12 +160,9 @@ static int autosuspend_earlysuspend_disable(void)
         pthread_mutex_unlock(&earlysuspend_mutex);
     }
 
-    ALOGV("autosuspend_earlysuspend_disable done\n");
+    ALOGD("autosuspend_earlysuspend_disable done");
 
     return 0;
-
-err:
-    return ret;
 }
 
 struct autosuspend_ops autosuspend_earlysuspend_ops = {
@@ -164,26 +172,26 @@ struct autosuspend_ops autosuspend_earlysuspend_ops = {
 
 void start_earlysuspend_thread(void)
 {
-    char buf[80];
     int ret;
 
     ret = access(EARLYSUSPEND_WAIT_FOR_FB_SLEEP, F_OK);
     if (ret < 0) {
+        log_err("accessing %s", EARLYSUSPEND_WAIT_FOR_FB_SLEEP);
         return;
     }
 
     ret = access(EARLYSUSPEND_WAIT_FOR_FB_WAKE, F_OK);
     if (ret < 0) {
+        log_err("accessing %s", EARLYSUSPEND_WAIT_FOR_FB_WAKE);
         return;
     }
 
     wait_for_fb_wake();
 
-    ALOGI("Starting early suspend unblocker thread\n");
+    ALOGI("Starting early suspend unblocker thread");
     ret = pthread_create(&earlysuspend_thread, NULL, earlysuspend_thread_func, NULL);
     if (ret) {
-        strerror_r(errno, buf, sizeof(buf));
-        ALOGE("Error creating thread: %s\n", buf);
+        log_err("creating thread");
         return;
     }
 
@@ -192,31 +200,16 @@ void start_earlysuspend_thread(void)
 
 struct autosuspend_ops *autosuspend_earlysuspend_init(void)
 {
-    char buf[80];
     int ret;
 
-    sPowerStatefd = open(EARLYSUSPEND_SYS_POWER_STATE, O_RDWR);
-
-    if (sPowerStatefd < 0) {
-        strerror_r(errno, buf, sizeof(buf));
-        ALOGW("Error opening %s: %s\n", EARLYSUSPEND_SYS_POWER_STATE, buf);
+    ret = open_file(EARLYSUSPEND_SYS_POWER_STATE, pwr_states, sizeof(pwr_states));
+    if (ret < 0) {
         return NULL;
     }
 
-    ret = write(sPowerStatefd, "on", 2);
-    if (ret < 0) {
-        strerror_r(errno, buf, sizeof(buf));
-        ALOGW("Error writing 'on' to %s: %s\n", EARLYSUSPEND_SYS_POWER_STATE, buf);
-        goto err_write;
-    }
-
-    ALOGI("Selected early suspend\n");
+    ALOGI("Selected early suspend");
 
     start_earlysuspend_thread();
 
     return &autosuspend_earlysuspend_ops;
-
-err_write:
-    close(sPowerStatefd);
-    return NULL;
 }
