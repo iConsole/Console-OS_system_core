@@ -384,8 +384,7 @@ int do_exec(int nargs, char **args)
 {
     pid_t pid;
     int status, i, prop_fd, prop_size, ret;
-    char *par[nargs], env_property[64], *env[3];
-    char *env_libpath = "LD_LIBRARY_PATH=/system/lib";
+    char *par[nargs], env_property[64], *env[2];
 
     for (i = 0; i < (nargs - 1); i++) {
         par[i] = args[i + 1];
@@ -399,9 +398,8 @@ int do_exec(int nargs, char **args)
         memset(env_property, 0, sizeof(env_property));
         sprintf(env_property, "ANDROID_PROPERTY_WORKSPACE=%d,%d",
                 dup(prop_fd), prop_size);
-        env[0] = env_libpath;
-        env[1] = env_property;
-        env[2] = NULL;
+        env[0] = env_property;
+        env[1] = NULL;
 
         ret = execve(par[0], par, env);
         ERROR("execve %s (ret = %d, errno = %d)\n", par[0], ret, errno);
