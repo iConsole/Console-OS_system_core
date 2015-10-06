@@ -202,6 +202,10 @@ mount <type> <device> <dir> [ <mountoption> ]*
    device by name.
    <mountoption>s include "ro", "rw", "remount", "noatime", ...
 
+readprops <path>
+   Read and set system properties based on the contents of a text file
+   at <path>
+
 restorecon <path> [ <path> ]*
    Restore the file named by <path> to the security context specified
    in the file_contexts configuration.

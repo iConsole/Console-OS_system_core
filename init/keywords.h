@@ -1,5 +1,6 @@
 
 #ifndef KEYWORD
+int do_builtin_coldboot(int nargs, char **args);
 int do_chroot(int nargs, char **args);
 int do_chdir(int nargs, char **args);
 int do_class_start(int nargs, char **args);
@@ -16,6 +17,8 @@ int do_mkdir(int nargs, char **args);
 int do_mount_all(int nargs, char **args);
 int do_mount(int nargs, char **args);
 int do_powerctl(int nargs, char **args);
+int do_probemod(int nargs, char **args);
+int do_readprops(int nargs, char **args);
 int do_restart(int nargs, char **args);
 int do_restorecon(int nargs, char **args);
 int do_restorecon_recursive(int nargs, char **args);
@@ -54,6 +57,7 @@ enum {
     KEYWORD(class_start, COMMAND, 1, do_class_start)
     KEYWORD(class_stop,  COMMAND, 1, do_class_stop)
     KEYWORD(class_reset, COMMAND, 1, do_class_reset)
+    KEYWORD(coldboot,    COMMAND, 1, do_builtin_coldboot)
     KEYWORD(console,     OPTION,  0, 0)
     KEYWORD(critical,    OPTION,  0, 0)
     KEYWORD(disabled,    OPTION,  0, 0)
@@ -74,6 +78,8 @@ enum {
     KEYWORD(oneshot,     OPTION,  0, 0)
     KEYWORD(onrestart,   OPTION,  0, 0)
     KEYWORD(powerctl,    COMMAND, 1, do_powerctl)
+    KEYWORD(probemod,    COMMAND, 1, do_probemod)
+    KEYWORD(readprops,   COMMAND, 1, do_readprops)
     KEYWORD(restart,     COMMAND, 1, do_restart)
     KEYWORD(restorecon,  COMMAND, 1, do_restorecon)
     KEYWORD(restorecon_recursive,  COMMAND, 1, do_restorecon_recursive)

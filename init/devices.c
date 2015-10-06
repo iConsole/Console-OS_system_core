@@ -21,7 +21,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-
+#include <sys/system_properties.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -41,12 +41,14 @@
 #include <sys/wait.h>
 
 #include <cutils/list.h>
+#include <cutils/probe_module.h>
 #include <cutils/uevent.h>
 
 #include "devices.h"
 #include "ueventd_parser.h"
 #include "util.h"
 #include "log.h"
+#include "parser.h"
 
 #define UNUSED __attribute__((__unused__))
 
@@ -59,6 +61,11 @@
 #define FIRMWARE_DIR2   "/vendor/firmware"
 #define FIRMWARE_DIR3   "/firmware/image"
 
+#define MODULES_ALIAS   "/system/lib/modules/modules.alias"
+#define MODULES_BLKLST  "/system/etc/modules.blacklist"
+#define READ_MODULES_ALIAS	1
+#define READ_MODULES_BLKLST	2
+
 extern struct selabel_handle *sehandle;
 
 static int device_fd = -1;
@@ -70,6 +77,7 @@ struct uevent {
     const char *firmware;
     const char *partition_name;
     const char *device_name;
+    const char *modalias;
     int partition_num;
     int major;
     int minor;
@@ -97,9 +105,26 @@ struct platform_node {
     struct listnode list;
 };
 
+struct module_alias_node {
+    char *name;
+    char *pattern;
+    struct listnode list;
+};
+
+struct module_blacklist_node {
+    char *name;
+    struct listnode list;
+};
+
 static list_declare(sys_perms);
 static list_declare(dev_perms);
 static list_declare(platform_names);
+static list_declare(modules_aliases_map);
+static list_declare(modules_blacklist);
+static list_declare(deferred_module_loading_list);
+
+static int read_modules_aliases();
+static int read_modules_blacklist();
 
 int add_dev_perms(const char *name, const char *attr,
                   mode_t perm, unsigned int uid, unsigned int gid,
@@ -400,6 +425,7 @@ static void parse_event(const char *msg, struct uevent *uevent)
     uevent->partition_name = NULL;
     uevent->partition_num = -1;
     uevent->device_name = NULL;
+    uevent->modalias = NULL;
 
         /* currently ignoring SEQNUM */
     while(*msg) {
@@ -430,6 +456,9 @@ static void parse_event(const char *msg, struct uevent *uevent)
         } else if(!strncmp(msg, "DEVNAME=", 8)) {
             msg += 8;
             uevent->device_name = msg;
+        } else if(!strncmp(msg, "MODALIAS=", 9)) {
+            msg += 9;
+            uevent->modalias = msg;
         }
 
         /* advance to after the next \0 */
@@ -565,7 +594,9 @@ static void handle_device(const char *action, const char *devpath,
     int i;
 
     if(!strcmp(action, "add")) {
-        make_device(devpath, path, block, major, minor, (const char **)links);
+        if (major >= 0 && minor >= 0)
+            make_device(devpath, path, block, major, minor, (const char **)links);
+        __system_property_set("ctl.dev_added", devpath);
         if (links) {
             for (i = 0; links[i]; i++)
                 make_link_init(devpath, links[i]);
@@ -577,7 +608,9 @@ static void handle_device(const char *action, const char *devpath,
             for (i = 0; links[i]; i++)
                 remove_link(devpath, links[i]);
         }
-        unlink(devpath);
+        __system_property_set("ctl.dev_removed", devpath);
+        if (major >= 0 && minor >= 0)
+            unlink(devpath);
     }
 
     if (links) {
@@ -600,10 +633,6 @@ static void handle_platform_device_event(struct uevent *uevent)
 static const char *parse_device_name(struct uevent *uevent, unsigned int len)
 {
     const char *name;
-
-    /* if it's not a /dev device, nothing else to do */
-    if((uevent->major < 0) || (uevent->minor < 0))
-        return NULL;
 
     /* do we have a name? */
     name = strrchr(uevent->path, '/');
@@ -777,8 +806,149 @@ static void handle_generic_device_event(struct uevent *uevent)
              uevent->major, uevent->minor, links);
 }
 
+static int is_module_blacklisted(const char *name)
+{
+    struct listnode *blklst_node;
+    struct module_blacklist_node *blacklist;
+    int ret = 0;
+
+    if (!name) goto out;
+
+    /* See if module is blacklisted, skip if it is */
+    list_for_each(blklst_node, &modules_blacklist) {
+        blacklist = node_to_item(blklst_node,
+                                 struct module_blacklist_node,
+                                 list);
+        if (!strcmp(name, blacklist->name)) {
+            INFO("modules %s is blacklisted\n", name);
+            ret = 1;
+            goto out;
+        }
+    }
+
+out:
+    return ret;
+}
+
+static int load_module_by_device_modalias(const char *id)
+{
+    struct listnode *alias_node;
+    struct module_alias_node *alias;
+    int ret = -1;
+
+    if (!id) goto out;
+
+    list_for_each(alias_node, &modules_aliases_map) {
+        alias = node_to_item(alias_node, struct module_alias_node, list);
+
+        if (alias && alias->name && alias->pattern) {
+            if (fnmatch(alias->pattern, id, 0) == 0) {
+                INFO("trying to load module %s due to uevents\n", alias->name);
+
+                if (!is_module_blacklisted(alias->name)) {
+                    if (insmod_by_dep(alias->name, "", NULL, 1, NULL)) {
+                        /* cannot load module. try another one since
+                         * there may be another match.
+                         */
+                        INFO("cannot load module %s due to uevents\n",
+                             alias->name);
+                    } else {
+                        /* loading was successful */
+                        INFO("loaded module %s due to uevents\n", alias->name);
+                        ret = 0;
+                        goto out;
+                    }
+                }
+            }
+        }
+    }
+
+out:
+    return ret;
+}
+
+static void handle_deferred_module_loading()
+{
+    struct listnode *node = NULL;
+    struct listnode *next = NULL;
+    struct module_alias_node *alias = NULL;
+
+    /* try to read the module alias mapping if map is empty
+     * if succeed, loading all the modules in the queue
+     */
+    if (!list_empty(&modules_aliases_map)) {
+        list_for_each_safe(node, next, &deferred_module_loading_list) {
+            alias = node_to_item(node, struct module_alias_node, list);
+
+            if (alias && alias->pattern) {
+                INFO("deferred loading of module for %s\n", alias->pattern);
+                load_module_by_device_modalias(alias->pattern);
+                free(alias->pattern);
+                list_remove(node);
+                free(alias);
+            }
+        }
+    }
+}
+
+int module_probe(const char *modalias)
+{
+    if (list_empty(&modules_aliases_map)) {
+        if (read_modules_aliases() == 0)
+            read_modules_blacklist();
+        else
+            return -1;
+    }
+
+    return load_module_by_device_modalias(modalias);
+}
+
+static void handle_module_loading(const char *modalias)
+{
+    char *tmp;
+    struct module_alias_node *node;
+
+    /* once modules.alias can be read,
+     * we load all the deferred ones
+     */
+    if (list_empty(&modules_aliases_map)) {
+        if (read_modules_aliases() == 0) {
+            read_modules_blacklist();
+            handle_deferred_module_loading();
+        }
+    }
+
+    if (!modalias) return;
+
+    if (list_empty(&modules_aliases_map)) {
+        /* if module alias mapping is empty,
+         * queue it for loading later
+         */
+        node = calloc(1, sizeof(*node));
+        if (node) {
+            node->pattern = strdup(modalias);
+            if (!node->pattern) {
+                free(node);
+            } else {
+                list_add_tail(&deferred_module_loading_list, &node->list);
+                INFO("add to queue for deferred module loading: %s",
+                        node->pattern);
+            }
+        } else {
+            ERROR("failed to allocate memory to store device id for deferred module loading.\n");
+        }
+    } else {
+        load_module_by_device_modalias(modalias);
+    }
+
+}
+
 static void handle_device_event(struct uevent *uevent)
 {
+    if (!strcmp(uevent->action,"add")) {
+        handle_module_loading(uevent->modalias);
+    }
+
     if (!strcmp(uevent->action,"add") || !strcmp(uevent->action, "change") || !strcmp(uevent->action, "online"))
         fixup_sys_perms(uevent->path);
 
@@ -946,6 +1116,150 @@ static void handle_firmware_event(struct uevent *uevent)
     }
 }
 
+static void parse_line_module_alias(struct parse_state *state, int nargs, char **args)
+{
+    struct module_alias_node *node;
+
+    if (!args ||
+        (nargs != 3) ||
+        !args[0] || !args[1] || !args[2]) {
+        /* empty line or not enough arguments */
+        return;
+    }
+
+    node = calloc(1, sizeof(*node));
+    if (!node) return;
+
+    node->name = strdup(args[2]);
+    if (!node->name) {
+        free(node);
+        return;
+    }
+
+    node->pattern = strdup(args[1]);
+    if (!node->pattern) {
+        free(node->name);
+        free(node);
+        return;
+    }
+
+    list_add_tail(&modules_aliases_map, &node->list);
+}
+
+static void parse_line_module_blacklist(struct parse_state *state, int nargs, char **args)
+{
+    struct module_blacklist_node *node;
+
+    if (!args ||
+        (nargs != 2) ||
+        !args[0] || !args[1]) {
+        /* empty line or not enough arguments */
+        return;
+    }
+
+    /* this line does not being with "blacklist" */
+    if (strncmp(args[0], "blacklist", 9)) return;
+
+    node = calloc(1, sizeof(*node));
+    if (!node) return;
+
+    node->name = strdup(args[1]);
+    if (!node->name) {
+        free(node);
+        return;
+    }
+
+    list_add_tail(&modules_blacklist, &node->list);
+}
+
+static int __read_modules_desc_file(int mode)
+{
+    struct parse_state state;
+    char *args[3];
+    int nargs;
+    char *data = NULL;
+    char *fn;
+    int fd = -1;
+    int ret = -1;
+    int args_to_read = 0;
+
+    if (mode == READ_MODULES_ALIAS) {
+        /* read modules.alias */
+        if (asprintf(&fn, "%s", MODULES_ALIAS) <= 0) {
+            goto out;
+        }
+    } else if (mode == READ_MODULES_BLKLST) {
+        /* read modules.blacklist */
+        if (asprintf(&fn, "%s", MODULES_BLKLST) <= 0) {
+            goto out;
+        }
+    } else {
+        /* unknown mode */
+        goto out;
+    }
+
+    fd = open(fn, O_RDONLY);
+    if (fd == -1) {
+        goto out;
+    }
+
+    /* read the whole file */
+    data = read_file(fn, 0);
+    if (!data) {
+        goto out;
+    }
+
+    /* invoke tokenizer */
+    nargs = 0;
+    state.filename = fn;
+    state.line = 1;
+    state.ptr = data;
+    state.nexttoken = 0;
+    if (mode == READ_MODULES_ALIAS) {
+        state.parse_line = parse_line_module_alias;
+        args_to_read = 3;
+    } else if (mode == READ_MODULES_BLKLST) {
+        state.parse_line = parse_line_module_blacklist;
+        args_to_read = 2;
+    }
+    for (;;) {
+        int token = next_token(&state);
+        switch (token) {
+        case T_EOF:
+            state.parse_line(&state, 0, 0);
+            ret = 0;
+            goto out;
+        case T_NEWLINE:
+            if (nargs) {
+                state.parse_line(&state, nargs, args);
+                nargs = 0;
+            }
+            break;
+        case T_TEXT:
+            if (nargs < args_to_read) {
+                args[nargs++] = state.text;
+            }
+            break;
+        }
+    }
+    ret = 0;
+
+out:
+    if (fd != -1) {
+        close(fd);
+    }
+    free(data);
+    return ret;
+}
+
+static int read_modules_aliases() {
+    return __read_modules_desc_file(READ_MODULES_ALIAS);
+}
+
+static int read_modules_blacklist() {
+    return __read_modules_desc_file(READ_MODULES_BLKLST);
+}
+
 #define UEVENT_MSG_LEN  2048
 void handle_device_fd()
 {
@@ -1018,7 +1332,7 @@ static void do_coldboot(DIR *d)
     }
 }
 
-static void coldboot(const char *path)
+void coldboot(const char *path)
 {
     DIR *d = opendir(path);
     if(d) {
@@ -1039,8 +1353,8 @@ void device_init(void)
         selinux_status_open(true);
     }
 
-    /* is 256K enough? udev uses 16MB! */
-    device_fd = uevent_open_socket(256*1024, true);
+    /* is 8MB enough? udev uses 16MB! */
+    device_fd = uevent_open_socket(8 * 1024 * 1024, true);
     if(device_fd < 0)
         return;
 

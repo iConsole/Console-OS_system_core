@@ -239,12 +239,22 @@ do_log_file(FileBuff  log, const char*  procfile)
 }
 
 static void
-do_log_procs(FileBuff  log)
+do_log_procs(FileBuff  log, int old_pid)
 {
-    DIR*  dir = opendir("/proc");
+    DIR*  dir;
     struct dirent*  entry;
 
-    do_log_uptime(log);
+    if (!old_pid) {
+      dir = opendir("/proc");
+      do_log_uptime(log);
+    } else {
+      char tmp[1024];
+      snprintf(tmp, sizeof(tmp), "/proc/%d/task", old_pid);
+      dir = opendir(tmp);
+    }
+
+    if (!dir)
+      return;
 
     while ((entry = readdir(dir)) != NULL) {
         /* only match numeric values */
@@ -256,6 +266,9 @@ do_log_procs(FileBuff  log)
             char  cmdline[1024];
             int   len;
             int   fd;
+
+            if (pid == old_pid)
+                continue;
 
             /* read command line and extract program name */
             snprintf(filename,sizeof(filename),"/proc/%d/cmdline",pid);
@@ -285,10 +298,13 @@ do_log_procs(FileBuff  log)
                     }
                }
             }
+            if (old_pid == 0)
+              do_log_procs(log, pid);
         }
     }
+    if (!old_pid)
+      do_log_ln(log);
     closedir(dir);
-    do_log_ln(log);
 }
 
 static FileBuffRec  log_stat[1];
@@ -355,7 +371,7 @@ int  bootchart_step( void )
 {
     do_log_file(log_stat,   "/proc/stat");
     do_log_file(log_disks,  "/proc/diskstats");
-    do_log_procs(log_procs);
+    do_log_procs(log_procs, 0);
 
     /* we stop when /data/bootchart-stop contains 1 */
     {

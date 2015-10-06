@@ -24,6 +24,8 @@
 #include <cutils/sockets.h>
 #include <errno.h>
 #include <assert.h>
+#include <time.h>
+#include <limits.h>
 
 #include <cutils/properties.h>
 #include <stdbool.h>
@@ -109,6 +111,29 @@ int32_t property_get_int32(const char *key, int32_t default_value) {
 #define _REALLY_INCLUDE_SYS__SYSTEM_PROPERTIES_H_
 #include <sys/_system_properties.h>
 
+/* used to increase waiting time between each successive polling */
+#define WAIT_INIT		(250 * 1000) /* microsecond = 0.25 s */
+#define WAIT_INC_FACTOR_SHIFT	3 /* increase by factor 1.125 */
+#define WAIT_MAX		(2000 * 1000) /* microsecond = 2 s */
+
+/*
+ * gettime() - returns the time in seconds of
+ * the system's monotonic clock or zero on error.
+ */
+static time_t gettime(void)
+{
+    struct timespec ts;
+    int ret;
+
+    ret = clock_gettime(CLOCK_MONOTONIC, &ts);
+    if (ret < 0) {
+        ALOGE("clock_gettime(CLOCK_MONOTONIC) failed: %s\n", strerror(errno));
+        return 0;
+    }
+
+    return ts.tv_sec;
+}
+
 int property_set(const char *key, const char *value)
 {
     return __system_property_set(key, value);
@@ -133,6 +158,42 @@ int property_get(const char *key, char *value, const char *default_value)
     return len;
 }
 
+int property_try_get(const char *key, char *value,
+                     const char *default_value, int timeout)
+{
+    int len = 0;
+    int wait;
+    time_t timeout_time = gettime() + timeout;
+
+    if (!key || !value) {
+        return 0;
+    }
+
+    /* initial waiting period between each polling */
+    wait = WAIT_INIT;
+
+    /* timeout == -1, wait indefinitely, or else */
+    /* just wait at most 'timeout' seconds. */
+    while ((timeout < 0) || (gettime() < timeout_time)) {
+        /* property_get returns 0 if property does not exist  */
+        /* and we do not want to have the default_value *yet* */
+        len = __system_property_get(key, value);
+        if (len > 0) {
+            return len;
+        }
+
+        usleep(wait);
+
+        /* make the next waiting period longer */
+        wait = wait + (wait >> WAIT_INC_FACTOR_SHIFT);
+        if (wait > WAIT_MAX) {
+            wait = WAIT_MAX;
+        }
+    }
+
+    return __property_get_real(key, value, default_value);
+}
+
 struct property_list_callback_data
 {
     void (*propfn)(const char *key, const char *value, void *cookie);
@@ -155,6 +216,56 @@ int property_list(
 {
     struct property_list_callback_data data = { propfn, cookie };
     return __system_property_foreach(property_list_callback, &data);
+}
+
+int property_cmp(const char *key, const char *cmp_to)
+{
+    int len = 0;
+    char value[PROP_VALUE_MAX];
+
+    if (key && cmp_to) {
+        len = __system_property_get(key, value);
+    }
+
+    if (len == 0) {
+        return INT_MIN;
+    } else {
+        return strncmp(value, cmp_to, PROP_VALUE_MAX);
+    }
+}
+
+int property_try_cmp(const char *key, const char *cmp_to, int timeout)
+{
+    int ret = INT_MIN;
+    int wait;
+    time_t timeout_time = gettime() + timeout;
+
+    if (!key || !cmp_to) {
+        return ret;
+    }
+
+    /* initial waiting period between each polling */
+    wait = WAIT_INIT;
+
+    /* timeout == -1, wait indefinitely, or else */
+    /* just wait at most 'timeout' seconds. */
+    while ((timeout < 0) || (gettime() < timeout_time)) {
+        /* property_get returns 0 if property does not exist  */
+        /* and we do not want to have the default_value *yet* */
+        ret = property_cmp(key, cmp_to);
+        if (ret == 0) {
+            return 0;
+        }
+        usleep(wait);
+
+        /* make the next waiting period longer */
+        wait = wait + (wait >> WAIT_INC_FACTOR_SHIFT);
+        if (wait > WAIT_MAX) {
+            wait = WAIT_MAX;
+        }
+    }
+
+    return property_cmp(key, cmp_to);
 }
 
 #elif defined(HAVE_SYSTEM_PROPERTY_SERVER)

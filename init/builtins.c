@@ -35,6 +35,10 @@
 #include <cutils/partition_utils.h>
 #include <cutils/android_reboot.h>
 #include <fs_mgr.h>
+#include <fnmatch.h>
+#include <dirent.h>
+#include <cutils/probe_module.h>
+#include <time.h>
 
 #include <selinux/selinux.h>
 #include <selinux/label.h>
@@ -48,6 +52,15 @@
 #include "log.h"
 
 #include <private/android_filesystem_config.h>
+
+#define TIMEZONE "/data/property/persist.sys.timezone"
+
+enum builtin_cmds {
+    DO_CHOWN,
+    DO_CHMOD,
+};
+
+#define MAX_RECUR_DEPTH 15
 
 int add_environment(const char *name, const char *value);
 
@@ -87,17 +100,24 @@ static int _open(const char *path)
     return fd;
 }
 
-static int _chown(const char *path, unsigned int uid, unsigned int gid)
+/* chown or chmod for one item (file, directory, etc.) */
+static int __chown_chmod_one(enum builtin_cmds action, const char *path,
+                             unsigned int uid, unsigned int gid, mode_t mode)
 {
     int fd;
-    int ret;
+    int ret = -1;
 
     fd = _open(path);
     if (fd < 0) {
         return -1;
     }
 
-    ret = fchown(fd, uid, gid);
+    if (action == DO_CHOWN) {
+        ret = fchown(fd, uid, gid);
+    } else if (action == DO_CHMOD) {
+        ret = fchmod(fd, mode);
+    }
+
     if (ret < 0) {
         int errno_copy = errno;
         close(fd);
@@ -107,30 +127,135 @@ static int _chown(const char *path, unsigned int uid, unsigned int gid)
 
     close(fd);
 
-    return 0;
+    return ret;
+}
+
+/* do chown or chmod recursively with pattern matching */
+static int __chown_chmod_recur(enum builtin_cmds action, const char *matching_path,
+                               unsigned int uid, unsigned int gid, mode_t mode,
+                               const char *cur_path, int depth)
+{
+    DIR* dirp;
+    struct dirent *de;
+    char* child_path = NULL;
+    int len;
+    int ret = 0;
+
+    if (!matching_path) {
+        return -1;
+    }
+    if (!cur_path) {
+        return -1;
+    }
+    if (depth > MAX_RECUR_DEPTH) {
+        /* prevent this from doing infinitely recurison */
+        return 0;
+    }
+
+    dirp = opendir(cur_path);
+    if (dirp) {
+        while ((de = readdir(dirp))) {
+            if ((de->d_type == DT_DIR) &&
+                (de->d_name[0] == '.') &&
+                ((de->d_name[1] == '\0') ||
+                 ((de->d_name[1] == '.') && (de->d_name[2] == '\0')))) {
+                /* ignore directories "." and ".." */
+                continue;
+            }
+
+            /* prepare path */
+            len = asprintf(&child_path, "%s/%s", cur_path, de->d_name);
+
+            if (len != -1) {
+                if (de->d_type == DT_DIR) {
+                    /* recurse into lowering level directory */
+                    ret += __chown_chmod_recur(action, matching_path,
+                                               uid, gid, mode, child_path,
+                                               (depth + 1));
+                } else {
+                    if (fnmatch(matching_path, child_path, FNM_PATHNAME) == 0) {
+                        /* FNM_PATHNAME: need to have the same number of '/' */
+                        ret += __chown_chmod_one(action, child_path,
+                                                 uid, gid, mode);
+                    }
+                }
+
+                free(child_path);
+                child_path = NULL;
+            } else {
+                /* failed to allocate space for child_path, */
+                /* count as one failure.                    */
+                ret += -1;
+            }
+        }
+
+        closedir(dirp);
+    }
+
+    return ret;
+}
+
+static int __chown_chmod(unsigned int action, const char *path,
+                         unsigned int uid, unsigned int gid, mode_t mode)
+{
+    char* leading_path = NULL;
+    char* tmp = NULL;
+    int do_wildcard = 0;
+    int len;
+    int ret;
+
+    if (!path) {
+        return -1;
+    }
+
+    /* need wildcard matching? */
+    tmp = strchr(path, '*');
+    if (tmp) {
+        /* this block shorten the path for matching purpose */
+
+        leading_path = strdup(path);
+        if (!leading_path) {
+            return -1;
+        }
+
+        do_wildcard = 1;
+
+        /* get path before '*' */
+        tmp = strchr(leading_path, '*');
+        if (tmp) {
+            *tmp = '\0';
+        }
+
+        /* remove up to and including the last '/' */
+        tmp = strrchr(leading_path, '/');
+        if (tmp) {
+            *tmp = '\0';
+            do_wildcard = 1;
+        }
+    }
+
+    if (do_wildcard) {
+        ret = __chown_chmod_recur(action, path,
+                                   uid, gid, mode, leading_path, 0);
+
+        if (leading_path) {
+            free(leading_path);
+        }
+
+        return ret;
+    } else {
+        return __chown_chmod_one(action, path, uid, gid, mode);
+    }
+}
+
+static int _chown(const char *path, unsigned int uid, unsigned int gid)
+{
+    return __chown_chmod(DO_CHOWN, path, uid, gid, 0);
 }
 
 static int _chmod(const char *path, mode_t mode)
 {
-    int fd;
-    int ret;
-
-    fd = _open(path);
-    if (fd < 0) {
-        return -1;
-    }
-
-    ret = fchmod(fd, mode);
-    if (ret < 0) {
-        int errno_copy = errno;
-        close(fd);
-        errno = errno_copy;
-        return -1;
-    }
-
-    close(fd);
-
-    return 0;
+    return __chown_chmod(DO_CHMOD, path, -1, -1, mode);
 }
 
 static int insmod(const char *filename, char *options)
@@ -335,6 +460,40 @@ int do_insmod(int nargs, char **args)
     }
 
     return do_insmod_inner(nargs, args, size);
+}
+
+static int do_probemod_inner(int nargs, char **args, int opt_len)
+{
+    char options[opt_len + 1];
+    int i;
+    int ret;
+
+    options[0] = '\0';
+    if (nargs > 2) {
+        strcpy(options, args[2]);
+        for (i = 3; i < nargs; ++i) {
+            strcat(options, " ");
+            strcat(options, args[i]);
+        }
+    }
+
+    ret = insmod_by_dep(args[1], options, NULL, 1, NULL);
+    if (ret)
+        ERROR("Couldn't probe module '%s'\n", args[1]);
+    return ret;
+}
+
+int do_probemod(int nargs, char **args)
+{
+    int i;
+    int size = 0;
+
+    if (nargs > 2) {
+        for (i = 2; i < nargs; ++i)
+            size += strlen(args[i]) + 1;
+    }
+
+    return do_probemod_inner(nargs, args, size);
 }
 
 int do_mkdir(int nargs, char **args)
@@ -560,9 +719,16 @@ int do_mount_all(int nargs, char **args)
             ret = -1;
         }
     } else if (pid == 0) {
+        char *prop_val;
         /* child, call fs_mgr_mount_all() */
         klog_set_level(6);  /* So we can see what fs_mgr_mount_all() does */
-        fstab = fs_mgr_read_fstab(args[1]);
+        prop_val = expand_references(args[1]);
+        if (!prop_val) {
+            ERROR("cannot expand '%s'\n", args[1]);
+            return -1;
+        }
+        fstab = fs_mgr_read_fstab(prop_val);
+        free(prop_val);
         child_ret = fs_mgr_mount_all(fstab);
         fs_mgr_free_fstab(fstab);
         if (child_ret == -1) {
@@ -653,19 +819,22 @@ int do_setkeycode(int nargs, char **args)
     return kbioctl(KDSETKEYCODE, &kbk);
 }
 
+int do_builtin_coldboot(int nargs, char **args)
+{
+    if (nargs != 2 || !args[1] || *args[1] == '\0')
+        return -1;
+
+    coldboot(args[1]);
+
+    return 0;
+}
+
 int do_setprop(int nargs, char **args)
 {
     const char *name = args[1];
     const char *value = args[2];
-    char prop_val[PROP_VALUE_MAX];
-    int ret;
 
-    ret = expand_props(prop_val, value, sizeof(prop_val));
-    if (ret) {
-        ERROR("cannot expand '%s' while assigning to '%s'\n", value, name);
-        return -EINVAL;
-    }
-    property_set(name, prop_val);
+    property_set(name, value);
     return 0;
 }
 
@@ -699,6 +868,14 @@ int do_stop(int nargs, char **args)
     return 0;
 }
 
+int do_readprops(int nargs, char **args)
+{
+    if (nargs == 2) {
+        return load_properties_from_file(args[1], NULL);
+    }
+    return -1;
+}
+
 int do_restart(int nargs, char **args)
 {
     struct service *svc;
@@ -712,16 +889,17 @@ int do_restart(int nargs, char **args)
 int do_powerctl(int nargs, char **args)
 {
     char command[PROP_VALUE_MAX];
-    int res;
     int len = 0;
     int cmd = 0;
     char *reboot_target;
 
-    res = expand_props(command, args[1], sizeof(command));
-    if (res) {
+    char *expcmd = expand_references(args[1]);
+    if (!expcmd) {
         ERROR("powerctl: cannot expand '%s'\n", args[1]);
         return -EINVAL;
     }
+    strcpy(command, expcmd);
+    free(expcmd);
 
     if (strncmp(command, "shutdown", 8) == 0) {
         cmd = ANDROID_RB_POWEROFF;
@@ -770,14 +948,73 @@ int do_rmdir(int nargs, char **args)
 int do_sysclktz(int nargs, char **args)
 {
     struct timezone tz;
+    struct timeval tv;
+    struct tm tm;
+    FILE *fp;
+    char *line = NULL;
+    size_t len = 0;
+    char hwtime_mode[PROP_VALUE_MAX];
+    time_t t;
 
     if (nargs != 2)
         return -1;
 
     memset(&tz, 0, sizeof(tz));
-    tz.tz_minuteswest = atoi(args[1]);   
-    if (settimeofday(NULL, &tz))
+    memset(&tv, 0, sizeof(tv));
+    memset(&tm, 0, sizeof(tm));
+
+    if (!strcmp(args[1], "0")) {
+        tz.tz_minuteswest = atoi(args[1]);
+        if (settimeofday(NULL, &tz))
+            return -1;
+        return 0;
+    }
+
+    if (gettimeofday(&tv, NULL))
         return -1;
+    if (property_get("ro.rtc_local_time", hwtime_mode) && !strcmp(hwtime_mode, "1")
+                    && !strcmp(args[1], "1")) {
+
+        /* Notify kernel that hwtime use local time */
+        write_file("/sys/class/misc/alarm/rtc_local_time",
+                    hwtime_mode);
+        /*
+         * If ro.hwtime.mode is local, set system time
+         * and saved system zone in case of network not
+         * available and auto syncing time not available.
+         */
+        if (access(TIMEZONE, 0) == 0) {
+            fp = fopen(TIMEZONE, "r+");
+            if (fp == NULL)
+                return -1;
+
+            if (getline(&line, &len, fp) == -1)
+                tz.tz_minuteswest = 0;
+            else {
+                /* Hack to get timezone. */
+                for (len = 0; *(line+len) != '\n' && *(line+len) != 0; len++);
+                *(line+len) = '\0';
+                property_set("persist.sys.timezone", line);
+                t = tv.tv_sec;
+                localtime_r(&t, &tm);
+                tz.tz_minuteswest = -(tm.tm_gmtoff / 60);
+            }
+            free(line);
+            fclose(fp);
+        }
+        else
+            tz.tz_minuteswest = 0;
+
+        /*
+         * At this moment, system time should be local
+         * time too, set it back to utc which linux required.
+         */
+        tv.tv_sec += tz.tz_minuteswest * 60;
+        if (settimeofday(&tv, &tz))
+            return -1;
+    } else {
+        return -1;
+    }
     return 0;
 }
 
@@ -785,15 +1022,8 @@ int do_write(int nargs, char **args)
 {
     const char *path = args[1];
     const char *value = args[2];
-    char prop_val[PROP_VALUE_MAX];
-    int ret;
 
-    ret = expand_props(prop_val, value, sizeof(prop_val));
-    if (ret) {
-        ERROR("cannot expand '%s' while writing to '%s'\n", value, path);
-        return -EINVAL;
-    }
-    return write_file(path, prop_val);
+    return write_file(path, value);
 }
 
 int do_copy(int nargs, char **args)
@@ -945,17 +1175,17 @@ int do_setsebool(int nargs, char **args) {
 
 int do_loglevel(int nargs, char **args) {
     int log_level;
-    char log_level_str[PROP_VALUE_MAX] = "";
+    char *log_level_str;
     if (nargs != 2) {
         ERROR("loglevel: missing argument\n");
         return -EINVAL;
     }
-
-    if (expand_props(log_level_str, args[1], sizeof(log_level_str))) {
+    if (!(log_level_str = expand_references(args[1]))) {
         ERROR("loglevel: cannot expand '%s'\n", args[1]);
         return -EINVAL;
     }
     log_level = atoi(log_level_str);
+    free(log_level_str);
     if (log_level < KLOG_ERROR_LEVEL || log_level > KLOG_DEBUG_LEVEL) {
         ERROR("loglevel: invalid log level'%d'\n", log_level);
         return -EINVAL;

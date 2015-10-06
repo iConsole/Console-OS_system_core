@@ -21,6 +21,11 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#ifdef __APPLE__
+typedef int64_t loff_t;
+#define lseek64 lseek
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
