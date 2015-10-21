@@ -53,7 +53,7 @@
 #define UNUSED __attribute__((__unused__))
 
 #define SYSFS_PREFIX    "/sys"
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 #define FIRMWARE_DIR1   "/system/lib/firmware"
 #else
 #define FIRMWARE_DIR1   "/etc/firmware"
