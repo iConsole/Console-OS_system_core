@@ -539,4 +539,3 @@ bool DecoderBase::decodeModRM(const EncoderBase::OpcodeDesc& odesc,
     opnd = EncoderBase::Operand(opndDesc.size, base, index, scale, disp);
     return true;
 }
-

@@ -66,7 +66,7 @@
 
 #if defined(__arm__) || (defined(__mips__) && !defined(__LP64__)) || defined(__aarch64__)
 #   define ANDROID_ARM_CODEGEN  1
-#elif defined(__i386__) //|| defined(__x86_64__)
+#elif defined(__i386__)
 #   define ANDROID_IA32_CODEGEN 1
 #else
 #   define ANDROID_ARM_CODEGEN  0

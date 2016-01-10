@@ -972,4 +972,3 @@ void GGLX86Assembler::component_sat(const component_t& v, const int temp_reg)
 // ----------------------------------------------------------------------------
 
 }; // namespace android
-

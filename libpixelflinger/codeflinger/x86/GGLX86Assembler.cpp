@@ -1505,4 +1505,3 @@ uint32_t X86RegisterAllocator::RegisterFile::touched() const
 // ----------------------------------------------------------------------------
 
 }; // namespace android
-

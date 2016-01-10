@@ -21,9 +21,8 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#include "codeflinger/tinyutils/Vector.h"
-#include "codeflinger/tinyutils/KeyedVector.h"
-#include "codeflinger/tinyutils/smartpointer.h"
+#include <utils/Vector.h>
+#include <utils/KeyedVector.h>
 
 #include "codeflinger/tinyutils/smartpointer.h"
 #include "codeflinger/CodeCache.h"

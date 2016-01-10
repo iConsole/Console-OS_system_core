@@ -133,4 +133,3 @@ private:
 };
 
 #endif  // ~ __DEC_BASE_H_INCLUDED__
-
